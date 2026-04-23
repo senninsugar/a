@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card BBS - Firebase Edition</title>
+    <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-database-compat.js"></script>
+    <style>
+        :root { --primary: #4a90e2; --bg: #f4f7f6; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: var(--bg); color: #333; max-width: 700px; margin: 40px auto; padding: 0 20px; transition: background 0.3s; }
+        .admin-mode { background-color: #2c3e50; }
+        .form-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        input, textarea { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
+        button { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .post-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 15px; position: relative; border-left: 5px solid var(--primary); }
+        .post-header { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 0.9em; }
+        .post-name { font-weight: bold; color: var(--primary); }
+        .reply-section { margin-top: 15px; padding: 10px 15px; background-color: #f8f9fa; border-radius: 8px; border-left: 3px solid #ddd; font-size: 0.95em; }
+        .admin-only { display: none; margin-top: 10px; border-top: 1px dashed #ddd; padding-top: 10px; }
+        .admin-mode .admin-only { display: block; }
+        .delete-btn { background: #e74c3c; padding: 5px 10px; font-size: 0.8em; }
+        .badge { font-size: 0.7em; padding: 2px 5px; border-radius: 4px; background: #eee; color: #666; margin-left: 5px; }
+    </style>
+</head>
+<body ondblclick="adminLogin()">
+
+    <div class="form-card">
+        <h2 id="title">スレッドに投稿</h2>
+        <p style="font-size: 0.8em; color: #777;">ダブルクリックで管理者ログイン | <b>/p [名前] [本文]</b> | <b>/onetime</b></p>
+        <form id="postForm">
+            <input type="text" id="nameInput" placeholder="ユーザー名" value="{{ user_name }}">
+            <input type="hidden" id="replyToInput">
+            <div id="replyDisplay" style="display:none; font-size: 0.8em; color: #666; margin-bottom: 5px;">
+                返信先: #<span id="replyTargetId"></span> <span onclick="clearReply()" style="cursor:pointer; color:red;">[取消]</span>
+            </div>
+            <textarea id="contentInput" rows="3" placeholder="メッセージを入力..." required></textarea>
+            <button type="submit">送信する</button>
+        </form>
+    </div>
+
+    <div id="feed"></div>
+
+    <script>
+        // --- Firebase設定（自分のプロジェクトの情報に書き換えてください） ---
+        const firebaseConfig =   const firebaseConfig = {
+    apiKey: "AIzaSyCzqDGRhKOOm6Y8gjP3-44aFTA3k5uwrUg",
+    authDomain: "senninbbs.firebaseapp.com",
+    databaseURL: "https://senninbbs-default-rtdb.firebaseio.com",
+    projectId: "senninbbs",
+    storageBucket: "senninbbs.firebasestorage.app",
+    messagingSenderId: "1010317855305",
+    appId: "1:1010317855305:web:897af1885be2cdcf470d98",
+    measurementId: "G-429TJW7LNR"
+  };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        let isAdmin = false;
+
+        // 管理者ログイン (ダブルクリック)
+        function adminLogin() {
+            const pass = prompt("管理者パスワードを入力してください:");
+            if (pass === "sennin123") {
+                isAdmin = true;
+                document.body.classList.add('admin-mode');
+                document.getElementById('title').innerText = "管理者モード";
+                alert("ログインしました");
+            }
+        }
+
+        // 投稿処理
+        document.getElementById('postForm').onsubmit = (e) => {
+            e.preventDefault();
+            const name = document.getElementById('nameInput').value || "名無しさん";
+            let content = document.getElementById('contentInput').value;
+            const reply_to = document.getElementById('replyToInput').value || null;
+            
+            let isPrivate = false;
+            let commandStr = null;
+            let expiresAt = null;
+
+            if (content.startsWith("/p ")) {
+                const parts = content.split(" ", 3);
+                if (parts.length >= 3) {
+                    isPrivate = true; commandStr = parts[1]; content = parts[2];
+                }
+            }
+            if (content.includes("/onetime")) {
+                expiresAt = Date.now() + 60000;
+                content = content.replace("/onetime", "(一時的投稿)");
+            }
+
+            db.ref('messages').push({
+                name, content, reply_to, isPrivate, commandStr, expiresAt,
+                timestamp: Date.now()
+            });
+
+            document.cookie = `user_name=${name}; max-age=${60*60*24*30}`;
+            document.getElementById('contentInput').value = "";
+            clearReply();
+        };
+
+        // リアルタイム表示更新
+        db.ref('messages').on('value', (snapshot) => {
+            const feed = document.getElementById('feed');
+            feed.innerHTML = "";
+            const data = snapshot.val();
+            if (!data) return;
+
+            const sortedIds = Object.keys(data).reverse();
+            sortedIds.forEach(key => {
+                const msg = data[key];
+                
+                // 一時的投稿とプライベートのフィルタ
+                if (msg.expiresAt && msg.expiresAt < Date.now()) return;
+                if (msg.isPrivate && !isAdmin) return; 
+
+                const div = document.createElement('div');
+                div.className = 'post-card';
+                div.innerHTML = `
+                    <div class="post-header">
+                        <div>
+                            <span class="post-name">${msg.name}</span>
+                            ${msg.isPrivate ? `<span class="badge">PRIVATE: ${msg.commandStr}</span>` : ''}
+                        </div>
+                        <span style="color:var(--primary);cursor:pointer;text-decoration:underline;font-size:0.8em" onclick="setReply('${key}')">返信する</span>
+                    </div>
+                    <div>${msg.content}</div>
+                    ${msg.reply_to ? `<div class="reply-section"><span style="font-size:0.7em;color:#888">Reply to ${msg.reply_to}</span><br>${msg.content}</div>` : ''}
+                    <div class="admin-only">
+                        <button class="delete-btn" onclick="deleteMsg('${key}')">削除</button>
+                    </div>
+                `;
+                feed.appendChild(div);
+            });
+        });
+
+        function deleteMsg(key) { if(confirm("削除しますか？")) db.ref('messages/'+key).remove(); }
+        function setReply(id) {
+            document.getElementById('replyToInput').value = id;
+            document.getElementById('replyTargetId').innerText = id;
+            document.getElementById('replyDisplay').style.display = 'block';
+            document.getElementById('contentInput').focus();
+        }
+        function clearReply() {
+            document.getElementById('replyToInput').value = '';
+            document.getElementById('replyDisplay').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
