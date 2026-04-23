@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Card BBS - Firebase Edition</title>
+    <title>Card BBS - Firebase Static</title>
     <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.1.3/firebase-database-compat.js"></script>
     <style>
@@ -29,7 +29,7 @@
         <h2 id="title">スレッドに投稿</h2>
         <p style="font-size: 0.8em; color: #777;">ダブルクリックで管理者ログイン | <b>/p [名前] [本文]</b> | <b>/onetime</b></p>
         <form id="postForm">
-            <input type="text" id="nameInput" placeholder="ユーザー名" value="{{ user_name }}">
+            <input type="text" id="nameInput" placeholder="ユーザー名">
             <input type="hidden" id="replyToInput">
             <div id="replyDisplay" style="display:none; font-size: 0.8em; color: #666; margin-bottom: 5px;">
                 返信先: #<span id="replyTargetId"></span> <span onclick="clearReply()" style="cursor:pointer; color:red;">[取消]</span>
@@ -42,8 +42,8 @@
     <div id="feed"></div>
 
     <script>
-        // --- Firebase設定（自分のプロジェクトの情報に書き換えてください） ---
-        const firebaseConfig =   const firebaseConfig = {
+        // --- Firebase設定 ---
+    　　  const firebaseConfig = {
     apiKey: "AIzaSyCzqDGRhKOOm6Y8gjP3-44aFTA3k5uwrUg",
     authDomain: "senninbbs.firebaseapp.com",
     databaseURL: "https://senninbbs-default-rtdb.firebaseio.com",
@@ -57,7 +57,14 @@
         const db = firebase.database();
         let isAdmin = false;
 
-        // 管理者ログイン (ダブルクリック)
+        // Cookieからユーザー名を取得
+        const getCookie = (name) => {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return decodeURIComponent(parts.pop().split(';').shift());
+        };
+        document.getElementById('nameInput').value = getCookie('user_name') || "";
+
         function adminLogin() {
             const pass = prompt("管理者パスワードを入力してください:");
             if (pass === "sennin123") {
@@ -68,7 +75,6 @@
             }
         }
 
-        // 投稿処理
         document.getElementById('postForm').onsubmit = (e) => {
             e.preventDefault();
             const name = document.getElementById('nameInput').value || "名無しさん";
@@ -81,9 +87,7 @@
 
             if (content.startsWith("/p ")) {
                 const parts = content.split(" ", 3);
-                if (parts.length >= 3) {
-                    isPrivate = true; commandStr = parts[1]; content = parts[2];
-                }
+                if (parts.length >= 3) { isPrivate = true; commandStr = parts[1]; content = parts[2]; }
             }
             if (content.includes("/onetime")) {
                 expiresAt = Date.now() + 60000;
@@ -95,12 +99,11 @@
                 timestamp: Date.now()
             });
 
-            document.cookie = `user_name=${name}; max-age=${60*60*24*30}`;
+            document.cookie = `user_name=${encodeURIComponent(name)}; max-age=${60*60*24*30}; path=/`;
             document.getElementById('contentInput').value = "";
             clearReply();
         };
 
-        // リアルタイム表示更新
         db.ref('messages').on('value', (snapshot) => {
             const feed = document.getElementById('feed');
             feed.innerHTML = "";
@@ -110,8 +113,6 @@
             const sortedIds = Object.keys(data).reverse();
             sortedIds.forEach(key => {
                 const msg = data[key];
-                
-                // 一時的投稿とプライベートのフィルタ
                 if (msg.expiresAt && msg.expiresAt < Date.now()) return;
                 if (msg.isPrivate && !isAdmin) return; 
 
@@ -126,7 +127,7 @@
                         <span style="color:var(--primary);cursor:pointer;text-decoration:underline;font-size:0.8em" onclick="setReply('${key}')">返信する</span>
                     </div>
                     <div>${msg.content}</div>
-                    ${msg.reply_to ? `<div class="reply-section"><span style="font-size:0.7em;color:#888">Reply to ${msg.reply_to}</span><br>${msg.content}</div>` : ''}
+                    ${msg.reply_to && data[msg.reply_to] ? `<div class="reply-section"><span style="font-size:0.7em;color:#888">Reply to ${data[msg.reply_to].name}</span><br>${data[msg.reply_to].content}</div>` : ''}
                     <div class="admin-only">
                         <button class="delete-btn" onclick="deleteMsg('${key}')">削除</button>
                     </div>
