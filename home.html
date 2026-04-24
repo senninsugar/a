@@ -92,8 +92,8 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
         let isAdmin = false;
-        let viewKey = null;
-        let lastReadTimestamp = localStorage.getItem('lastRead') || 0;
+        let viewKey = "";
+        let lastReadTimestamp = parseInt(localStorage.getItem('lastRead') || 0);
         let myIp = "anonymous"; // IP取得をスキップし、固定値を使用
 
         // 通知許可
@@ -145,7 +145,8 @@
             const reply_to = document.getElementById('replyToInput').value || null;
 
             if (content.startsWith("/w ")) {
-                viewKey = content.split(" ");
+                const parts = content.split(" ");
+                viewKey = parts || "";
                 document.getElementById('contentInput').value = "";
                 pushNotice(`${viewKey} 宛のメッセージを表示します`);
                 renderFeed(); return;
@@ -154,8 +155,12 @@
             let isPrivate = false, commandStr = null, expiresAt = null, dice = null, poll = null;
 
             if (content.startsWith("/p ")) {
-                const parts = content.split(" ", 3);
-                if (parts.length >= 3) { isPrivate = true; commandStr = parts; content = parts; }
+                const parts = content.split(" ");
+                if (parts.length >= 3) { 
+                    isPrivate = true; 
+                    commandStr = parts; 
+                    content = parts.slice(2).join(" "); 
+                }
             }
             if (content.includes("/dice")) {
                 dice = Math.floor(Math.random() * 100) + 1;
@@ -165,7 +170,7 @@
                 const parts = content.split(" ");
                 if (parts.length >= 3) {
                     poll = { options: [ {text: parts, votes: 0}, {text: parts, votes: 0} ] };
-                    content = "【アンケート】";
+                    content = "【アンケート】 " + (parts || "");
                 }
             }
             if (content.includes("/onetime")) {
