@@ -93,25 +93,37 @@
         const db = firebase.database();
         let isAdmin = false;
         let viewKey = "";
-        let lastReadTimestamp = parseInt(localStorage.getItem('lastRead') || 0);
-        let myIp = "anonymous"; // IP取得をスキップし、固定値を使用
+        
+        // localStorageの読み込みを安全に
+        let lastReadTimestamp = 0;
+        try {
+            const stored = localStorage.getItem('lastRead');
+            lastReadTimestamp = stored ? parseInt(stored) : 0;
+        } catch(e) {
+            console.log("localStorage access denied");
+        }
+        
+        let myIp = "anonymous"; 
 
-        // 通知許可
         if (Notification.permission !== "granted") Notification.requestPermission();
 
         function pushNotice(text) {
             const container = document.getElementById('notificationCenter');
+            if(!container) return;
             const div = document.createElement('div');
             div.className = 'notice-item';
             div.innerText = text;
             container.appendChild(div);
-            setTimeout(() => div.remove(), 5000);
+            setTimeout(() => { if(div) div.remove(); }, 5000);
         }
 
         const getCookie = (name) => {
-            const value = `; ${document.cookie}`;
-            const parts = value.split(`; ${name}=`);
-            if (parts.length === 2) return decodeURIComponent(parts.pop().split(';').shift());
+            try {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return decodeURIComponent(parts.pop().split(';').shift());
+            } catch(e) { return ""; }
+            return "";
         };
         document.getElementById('nameInput').value = getCookie('user_name') || "";
 
@@ -149,7 +161,8 @@
                 viewKey = parts || "";
                 document.getElementById('contentInput').value = "";
                 pushNotice(`${viewKey} 宛のメッセージを表示します`);
-                renderFeed(); return;
+                renderFeed(); 
+                return;
             }
 
             let isPrivate = false, commandStr = null, expiresAt = null, dice = null, poll = null;
@@ -181,13 +194,17 @@
             db.ref('messages').push({
                 name, content, reply_to, isPrivate, commandStr, expiresAt, dice, poll,
                 isAdminPost: isAdmin, timestamp: Date.now(), reactions: {}, ip: myIp
+            }).then(() => {
+                if (!isAdmin) db.ref('admin_notices').push({ text: `${name}が投稿しました`, time: Date.now() });
+                document.getElementById('contentInput').value = "";
+                clearReply();
+            }).catch(err => {
+                alert("送信に失敗しました。接続を確認してください。");
             });
 
-            if (!isAdmin) db.ref('admin_notices').push({ text: `${name}が投稿しました`, time: Date.now() });
-
-            document.cookie = `user_name=${encodeURIComponent(name)}; max-age=${60*60*24*30}; path=/`;
-            document.getElementById('contentInput').value = "";
-            clearReply();
+            try {
+                document.cookie = `user_name=${encodeURIComponent(name)}; max-age=${60*60*24*30}; path=/`;
+            } catch(e) {}
         };
 
         function addReaction(key, emoji) {
@@ -196,33 +213,39 @@
 
         function votePoll(msgKey, optIdx) {
             const votedKey = 'voted_' + msgKey;
-            if (localStorage.getItem(votedKey)) { pushNotice("投票は1回までです"); return; }
-            db.ref(`messages/${msgKey}/poll/options/${optIdx}/votes`).transaction(count => (count || 0) + 1);
-            localStorage.setItem(votedKey, "true");
+            try {
+                if (localStorage.getItem(votedKey)) { pushNotice("投票は1回までです"); return; }
+                db.ref(`messages/${msgKey}/poll/options/${optIdx}/votes`).transaction(count => (count || 0) + 1);
+                localStorage.setItem(votedKey, "true");
+            } catch(e) {
+                db.ref(`messages/${msgKey}/poll/options/${optIdx}/votes`).transaction(count => (count || 0) + 1);
+            }
         }
 
         function adminBan(ip) {
-            if (!isAdmin) return;
-            if (!ip) return;
+            if (!isAdmin || !ip) return;
             if (confirm(`IP: ${ip} をBANしますか？`)) {
                 db.ref('bans/' + ip.replace(/\./g, '_')).set(true);
             }
         }
 
         function adminMute(ip) {
-            if (!isAdmin) return;
-            if (!ip) return;
+            if (!isAdmin || !ip) return;
             if (confirm(`IP: ${ip} をミュートしますか？`)) {
                 db.ref('mutes/' + ip.replace(/\./g, '_')).set(true);
             }
         }
 
         async function renderFeed() {
-            const mutesSnap = await db.ref('mutes').get();
-            const mutes = mutesSnap.val() || {};
+            let mutes = {};
+            try {
+                const mutesSnap = await db.ref('mutes').get();
+                mutes = mutesSnap.val() || {};
+            } catch(e) {}
 
             db.ref('messages').once('value', (snapshot) => {
                 const feed = document.getElementById('feed');
+                if(!feed) return;
                 feed.innerHTML = "";
                 const data = snapshot.val();
                 if (!data) return;
@@ -234,8 +257,6 @@
                 sortedIds.forEach(key => {
                     const msg = data[key];
                     if (msg.expiresAt && msg.expiresAt < Date.now()) return;
-                    
-                    // ミュートIPチェック
                     if (msg.ip && mutes[msg.ip.replace(/\./g, '_')] && !isAdmin) return;
 
                     const canSee = isAdmin || !msg.isPrivate || (msg.isPrivate && msg.commandStr === viewKey);
@@ -243,9 +264,10 @@
 
                     maxTimestamp = Math.max(maxTimestamp, msg.timestamp);
                     const isNew = msg.timestamp > lastReadTimestamp;
-                    const myName = document.getElementById('nameInput').value;
+                    const myNameInput = document.getElementById('nameInput');
+                    const myName = myNameInput ? myNameInput.value : "";
                     
-                    if (isNew && myName && msg.content.includes(`@${myName}`)) {
+                    if (isNew && myName && msg.content.indexOf(`@${myName}`) !== -1) {
                         pushNotice(`@${myName} さんにメンションが届きました`);
                         if (Notification.permission === "granted") new Notification("メンション通知", {body: msg.content});
                     }
@@ -257,19 +279,19 @@
                     let displayContent = msg.content.replace(/@(\S+)/g, '<span class="mention">@$1</span>');
                     
                     let pollHtml = "";
-                    if (msg.poll) {
-                        const total = msg.poll.options.reduce((a, b) => a + b.votes, 0);
+                    if (msg.poll && msg.poll.options) {
+                        const total = msg.poll.options.reduce((a, b) => a + (b.votes || 0), 0);
                         pollHtml = `<div class="poll-container">` + msg.poll.options.map((opt, i) => {
                             const pct = total > 0 ? (opt.votes / total * 100) : 0;
                             return `<div class="poll-option" onclick="votePoll('${key}', ${i})">
                                 <div class="poll-bar" style="width:${pct}%"></div>
-                                <div class="poll-text"><span>${opt.text}</span><span>${opt.votes}票</span></div>
+                                <div class="poll-text"><span>${opt.text}</span><span>${opt.votes || 0}票</span></div>
                             </div>`;
                         }).join('') + `</div>`;
                     }
 
                     let reactHtml = `<div class="reaction-bar">` + 
-                        ['👍', '❤️', '😂', '😮'].map(e => `<button class="reaction-btn" onclick="addReaction('${key}', '${e}')">${e} ${msg.reactions?.[e] || 0}</button>`).join('') + 
+                        ['👍', '❤️', '😂', '😮'].map(e => `<button class="reaction-btn" onclick="addReaction('${key}', '${e}')">${e} ${msg.reactions ? (msg.reactions[e] || 0) : 0}</button>`).join('') + 
                         `</div>`;
 
                     div.innerHTML = `
@@ -304,13 +326,15 @@
                         const container = postElements[msg.reply_to].querySelector('.replies-container');
                         el.classList.add('reply-section');
                         el.classList.remove('post-card');
-                        container.appendChild(el);
+                        if(container) container.appendChild(el);
                     } else {
                         feed.insertBefore(el, feed.firstChild);
                     }
                 });
 
-                localStorage.setItem('lastRead', maxTimestamp);
+                try {
+                    localStorage.setItem('lastRead', maxTimestamp);
+                } catch(e) {}
             });
         }
 
