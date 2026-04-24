@@ -61,7 +61,7 @@
                 返信先: #<span id="replyTargetId"></span> <span onclick="clearReply()" style="cursor:pointer; color:red;">[取消]</span>
             </div>
             <textarea id="contentInput" rows="3" placeholder="メッセージを入力..." required></textarea>
-            <button type="submit" id="submitBtn">取得中...</button>
+            <button type="submit" id="submitBtn">送信する</button>
         </form>
     </div>
 
@@ -94,31 +94,7 @@
         let isAdmin = false;
         let viewKey = null;
         let lastReadTimestamp = localStorage.getItem('lastRead') || 0;
-        let myIp = null;
-
-        // IP取得処理
-        async function fetchIp() {
-            try {
-                // 複数のサービスを試行して確実に取得する
-                const response = await fetch('https://api.ipify.org?format=json');
-                const data = await response.json();
-                myIp = data.ip;
-                document.getElementById('submitBtn').innerText = "送信する";
-            } catch (e) {
-                console.error("IP取得失敗:", e);
-                // フォールバック
-                try {
-                    const res2 = await fetch('https://inet-ip.info/json');
-                    const data2 = await res2.json();
-                    myIp = data2.ip;
-                    document.getElementById('submitBtn').innerText = "送信する";
-                } catch (e2) {
-                    document.getElementById('submitBtn').innerText = "IP取得失敗(リロードしてください)";
-                    document.getElementById('submitBtn').disabled = true;
-                }
-            }
-        }
-        fetchIp();
+        let myIp = "anonymous"; // IP取得をスキップし、固定値を使用
 
         // 通知許可
         if (Notification.permission !== "granted") Notification.requestPermission();
@@ -163,15 +139,10 @@
 
         document.getElementById('postForm').onsubmit = async (e) => {
             e.preventDefault();
-            if (!myIp) { alert("IP取得を待っています..."); return; }
 
             const name = document.getElementById('nameInput').value || "名無しさん";
             let content = document.getElementById('contentInput').value;
             const reply_to = document.getElementById('replyToInput').value || null;
-
-            // BANチェック
-            const banSnap = await db.ref('bans/' + myIp.replace(/\./g, '_')).get();
-            if (banSnap.exists()) { alert("アクセスが制限されています。"); return; }
 
             if (content.startsWith("/w ")) {
                 viewKey = content.split(" ");
